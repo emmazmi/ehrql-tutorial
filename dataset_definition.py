@@ -1,16 +1,67 @@
-from ehrql import create_dataset
-from ehrql.tables.core import patients, medications
+from ehrql import (
+    case,
+    codelist_from_csv,
+    create_dataset,
+    days,
+    when,
+)
+from ehrql.tables.tpp import (
+    addresses,
+    clinical_events,
+    apcs,
+    medications,
+    patients,
+    practice_registrations,
+)
+
+index_date = "2023-10-01"
 
 dataset = create_dataset()
 
-dataset.define_population(patients.date_of_birth.is_on_or_before("1999-12-31"))
+is_female_or_male = patients.sex.is_in(["female", "male"])
 
-asthma_codes = ["39113311000001107", "39113611000001102"]
-latest_asthma_med = (
-    medications.where(medications.dmd_code.is_in(asthma_codes))
-    .sort_by(medications.date)
-    .last_for_patient()
+was_adult = (patients.age_on(index_date) >= 18) & (
+    patients.age_on(index_date) <= 110
+)
+was_alive = (
+    patients.date_of_death.is_after(index_date)
+    | patients.date_of_death.is_null()
 )
 
-dataset.asthma_med_date = latest_asthma_med.date
-dataset.asthma_med_code = latest_asthma_med.dmd_code
+was_registered = practice_registrations.for_patient_on(
+    index_date
+).exists_for_patient()
+
+dataset.define_population(
+    is_female_or_male
+    & was_adult
+    & was_alive
+    & was_registered
+)
+
+dataset.sex = patients.sex
+
+dataset.age = patients.age_on(index_date)
+
+imd_rounded = addresses.for_patient_on(
+    index_date
+).imd_rounded
+max_imd = 32844
+dataset.imd_quintile = case(
+    when(imd_rounded < int(max_imd * 1 / 5)).then(1),
+    when(imd_rounded < int(max_imd * 2 / 5)).then(2),
+    when(imd_rounded < int(max_imd * 3 / 5)).then(3),
+    when(imd_rounded < int(max_imd * 4 / 5)).then(4),
+    when(imd_rounded <= max_imd).then(5),
+)
+
+dataset.date_of_first_admission = (
+    apcs.where(
+        apcs.admission_date.is_after(
+            index_date
+        )
+    )
+    .sort_by(apcs.admission_date)
+    .first_for_patient()
+    .admission_date
+)
